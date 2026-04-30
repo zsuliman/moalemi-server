@@ -39,7 +39,6 @@ app.post('/ask', async (req, res) => {
       } catch (err) {}
     }
 
-    // المنع القاطع والحاسم للصور العلمية الدقيقة
     let systemPrompt = `أنت معلم ذكي ومبدع. التزم بالآتي حرفياً:
 1. توليد الصور [IMAGE: description]: مسموح فقط وفقط للمواضيع الوصفية (مثل الحيوانات، المعالم التاريخية، الفضاء، النباتات).
 2. حظر الصور العلمية: يُمنع منعاً باتاً وتحت أي ظرف توليد صور لمسائل الرياضيات، الفيزياء، المخططات البيانية، أو أي مسألة تحتوي على أرقام وقوى متجهة. إذا طلب الطالب ذلك، اعتذر بلباقة وأخبره أنك ستركز على الشرح النصي الدقيق لتجنب أي تشتيت بصري، ثم قم بشرح المسألة تفصيلياً.
@@ -47,47 +46,53 @@ app.post('/ask', async (req, res) => {
 4. الرياضيات: استخدم الرموز العادية ويمنع أكواد LaTeX.
 5. الطقس: إذا سأل عن الطقس ولم تتوفر المعلومة، اطلب منه ذكر اسم مدينته.${weatherSecretContext}`;
 
-    let apiMessages = [{ role: 'system', content: systemPrompt }];
+    let contents = [];
 
+    // ترتيب المحادثات السابقة لتناسب Gemini
     if (history && Array.isArray(history)) {
       history.forEach(msg => {
-        const role = msg.role === 'ai' ? 'assistant' : 'user';
+        const role = msg.role === 'ai' ? 'model' : 'user';
         if (msg.text) {
-          apiMessages.push({ role: role, content: msg.text });
+          contents.push({ role: role, parts: [{ text: msg.text }] });
         }
       });
     }
 
-    let currentContent = [];
-    if (question) currentContent.push({ type: "text", text: question });
-    else if (imageBase64) currentContent.push({ type: "text", text: "اشرح لي هذه الصورة." });
+    // تجهيز السؤال الحالي والصورة إن وجدت
+    let currentParts = [];
+    if (question) currentParts.push({ text: question });
+    else if (imageBase64) currentParts.push({ text: "اشرح لي هذه الصورة." });
 
     if (imageBase64) {
-      currentContent.push({
-        type: "image_url",
-        image_url: { url: `data:image/jpeg;base64,${imageBase64}` }
+      currentParts.push({
+        inline_data: {
+          mime_type: "image/jpeg",
+          data: imageBase64.replace(/^data:image\/\w+;base64,/, '') // تنظيف الـ Base64 ليتوافق مع جوجل
+        }
       });
     }
     
-    apiMessages.push({ role: 'user', content: currentContent });
+    contents.push({ role: 'user', parts: currentParts });
 
+    // الاتصال المباشر والرسمي بـ Google Gemini
     const response = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
-        model: 'openai/gpt-4o-mini',
-        messages: apiMessages,
-        temperature: 0.1, // حرارة منخفضة جداً لضمان الالتزام الصارم
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents: contents,
+        generationConfig: { temperature: 0.1 }
       },
       {
-        headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         timeout: 30000 
       }
     );
 
-    let answer = response.data?.choices?.[0]?.message?.content || '';
+    let answer = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     if (!answer.trim()) return res.json({ answer: 'المعلم يجمع أفكاره 🧠، يرجى المحاولة مرة أخرى.' });
     answer = answer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
+    // معالجة توليد الصور عبر Pollinations
     let aiImageBase64 = null;
     const imageRegex = /\[IMAGE:\s*(.+?)\]/i;
     let match = answer.match(imageRegex);
@@ -118,5 +123,6 @@ app.post('/ask', async (req, res) => {
   }
 });
 
-const PORT = 3000;
-app.listen(PORT, () => { console.log(`🚀 Server running on port ${PORT} with Strict Ban on Math Diagrams!`); });
+// استخدام المنفذ السحابي لـ Render
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => { console.log(`🚀 Server running on port ${PORT} with official Gemini API!`); });
